@@ -22,7 +22,7 @@ RUN apk add --no-cache git
 
 # Copy package files first for better layer caching
 COPY package.json package-lock.json ./
-RUN npm ci --force --only=production
+RUN npm ci --force
 
 COPY . .
 ENV APP_BUILD_HASH=${BUILD_HASH}
@@ -68,7 +68,7 @@ ENV WHISPER_MODEL="base" \
     RAG_EMBEDDING_MODEL="$USE_EMBEDDING_MODEL_DOCKER" \
     RAG_RERANKING_MODEL="$USE_RERANKING_MODEL_DOCKER" \
     SENTENCE_TRANSFORMERS_HOME="/app/backend/data/cache/embedding/models" \
-    TIKTOKEN_ENCODING_NAME="${USE_TIKTOKEN_ENCODING_NAME}" \
+    TIKTOKEN_ENCODING_NAME="cl100k_base" \
     TIKTOKEN_CACHE_DIR="/app/backend/data/cache/tiktoken" \
     HF_HOME="/app/backend/data/cache/embedding/models" \
     # CPU-specific optimizations
