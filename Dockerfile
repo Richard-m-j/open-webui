@@ -43,7 +43,7 @@ COPY ./backend/requirements.txt ./requirements.txt
 
 # Install pip deps + pyinstaller
 RUN pip install --no-cache-dir --upgrade pip uv pyinstaller && \
-    pip install torch torchvision toraudio --index-url https://download.pytorch.org/whl/cpu --no-cache-dir && \
+    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu --no-cache-dir && \
     uv pip install --system -r requirements.txt --no-cache-dir
 
 # Environment for pre-downloading models
