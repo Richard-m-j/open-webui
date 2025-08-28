@@ -55,8 +55,8 @@ RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTr
 # Copy backend source
 COPY ./backend .
 
-# Build backend binary with PyInstaller
-RUN pyinstaller --onefile start.py \
+# Build backend binary with PyInstaller (main.py is the entrypoint)
+RUN pyinstaller --onefile main.py \
     --name backend_app \
     --clean --strip \
     --hidden-import torch \
@@ -99,11 +99,13 @@ COPY --from=python-builder /app/backend/dist/backend_app /app/backend_app
 COPY --from=python-builder /app/backend/data /app/backend/data
 COPY --from=python-builder /app/backend/start.sh /app/start.sh
 
+# Patch start.sh to call binary instead of python
+RUN sed -i 's|python .*|/app/backend_app|' /app/start.sh && chmod +x /app/start.sh
+
 # Security: non-root user
 RUN addgroup -g $GID app && \
     adduser -D -u $UID -G app app && \
-    chown -R app:app /app && \
-    chmod +x /app/start.sh
+    chown -R app:app /app
 USER app
 
 EXPOSE 8080
