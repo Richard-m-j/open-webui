@@ -1,0 +1,20 @@
+name: Build and Push image to dockerhub
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build the Docker image
+      run: docker build . --file Dockerfile --tag richardjoseph1/open-webui-kube-openwebui:latest
+    - name: push image to docker hub
+      run: |
+        docker login -u richardjoseph1 -p ${{ secrets.DOCKERHUB_TOKEN }}
+        docker push richardjoseph1/open-webui-kube-openwebui:latest
