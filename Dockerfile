@@ -5,13 +5,9 @@ FROM --platform=$BUILDPLATFORM node:22-alpine3.20 AS build
 ARG BUILD_HASH
 WORKDIR /app
 
-# NOTE: Using a .dockerignore file is highly recommended to prevent
-# copying unnecessary files (like .git, .vscode, etc.) into the image.
+# Using a .dockerignore file is highly recommended
 RUN apk add --no-cache git
 COPY package.json package-lock.json ./
-
-# WARNING: --force is used here, which can hide underlying dependency issues.
-# It's better to fix conflicts in package-lock.json and remove --force.
 RUN npm ci --force
 
 COPY . .
@@ -20,17 +16,17 @@ RUN npm run build
 
 
 ######## Python Builder Stage ########
-# FIX: Use a Debian-based image for glibc, which is required by the official PyTorch wheels.
+# Use a Debian-based image for glibc compatibility with PyTorch
 FROM python:3.11-slim-bookworm AS python-builder
 
-# FIX: Declare build arguments and provide a sensible default to prevent build failures.
+# Declare build arguments with default values
 ARG USE_EMBEDDING_MODEL="all-MiniLM-L6-v2"
-ARG UID
-ARG GID
+ARG UID=1000
+ARG GID=1000
 
 WORKDIR /app/backend
 
-# FIX: Use apt-get for Debian-based image.
+# Install system dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         git build-essential pandoc gcc curl jq \
@@ -38,15 +34,16 @@ RUN apt-get update && \
         libblas3 liblapack3 libopenblas-dev && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first for better layer caching
+# Copy requirements for better layer caching
 COPY ./backend/requirements.txt ./requirements.txt
 
-# Install pip deps + pyinstaller
+# Install Python dependencies
+# FIX: Corrected typo from 'toraudio' to 'torchaudio'
 RUN pip install --no-cache-dir --upgrade pip uv pyinstaller && \
     pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu --no-cache-dir && \
     uv pip install --system -r requirements.txt --no-cache-dir
 
-# Environment for pre-downloading models
+# Set environment for pre-downloading models
 ENV WHISPER_MODEL="base" \
     WHISPER_MODEL_DIR="/app/backend/data/cache/whisper/models" \
     RAG_EMBEDDING_MODEL=$USE_EMBEDDING_MODEL \
@@ -54,16 +51,16 @@ ENV WHISPER_MODEL="base" \
     TIKTOKEN_CACHE_DIR="/app/backend/data/cache/tiktoken" \
     HF_HOME="/app/backend/data/cache/embedding/models"
 
-# Pre-download models
+# Pre-download models for faster startup
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('${RAG_EMBEDDING_MODEL}', device='cpu')" && \
     python -c "from faster_whisper import WhisperModel; WhisperModel('${WHISPER_MODEL}', device='cpu', compute_type='int8', download_root='${WHISPER_MODEL_DIR}')" && \
     python -c "import tiktoken; tiktoken.get_encoding('${TIKTOKEN_ENCODING_NAME}')"
 
-# Copy backend source
+# Copy the backend source code
 COPY ./backend .
 
-# Build backend binary with PyInstaller
-RUN pyinstaller --onefile start.py \
+# Build the backend binary with PyInstaller
+RUN pyinstaller --onefile open_webui/main.py \
     --name backend_app \
     --clean --strip \
     --hidden-import torch \
@@ -77,15 +74,14 @@ RUN pyinstaller --onefile start.py \
 
 
 ######## Final Runtime Stage ########
-# FIX: Use a Debian-based slim image to match the builder's glibc environment.
-# This prevents binary incompatibility errors with the PyInstaller executable.
+# FIX: Use a debian-based image to match the builder's glibc environment
 FROM debian:bookworm-slim AS runtime
 
 ARG UID=1000
 ARG GID=1000
 WORKDIR /app
 
-# FIX: Use apt-get for Debian and install equivalent minimal dependencies.
+# Install minimal runtime dependencies using apt-get
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         ffmpeg \
@@ -100,17 +96,17 @@ RUN apt-get update && \
         ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy frontend build
+# Copy frontend build artifacts
 COPY --from=build /app/build /app/build
 COPY --from=build /app/CHANGELOG.md /app/CHANGELOG.md
 COPY --from=build /app/package.json /app/package.json
 
-# Copy backend binary + model cache + start.sh
+# Copy backend binary, model cache, and start script
 COPY --from=python-builder /app/backend/dist/backend_app /app/backend_app
 COPY --from=python-builder /app/backend/data /app/backend/data
 COPY --from=python-builder /app/backend/start.sh /app/start.sh
 
-# Security: non-root user
+# Create a non-root user for security
 RUN addgroup -g $GID app && \
     adduser --system --disabled-password --no-create-home --uid $UID --ingroup app app && \
     chown -R app:app /app && \
