@@ -104,7 +104,6 @@ RUN apt-get update && \
         ffmpeg \
         libsm6 \
         libxext6 \
-        # CPU optimization libraries
         libblas3 \
         liblapack3 \
         libopenblas-dev && \
@@ -116,7 +115,6 @@ COPY --chown=$UID:$GID ./backend/requirements.txt ./requirements.txt
 
 # CPU-optimized Python package installation
 RUN pip3 install --no-cache-dir --upgrade pip uv && \
-    # Install CPU-only PyTorch for smaller size and better CPU performance
     pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu --no-cache-dir && \
     uv pip install --system -r requirements.txt --no-cache-dir
 
@@ -124,11 +122,9 @@ RUN pip3 install --no-cache-dir --upgrade pip uv && \
 RUN python -c "import os; from sentence_transformers import SentenceTransformer; SentenceTransformer(os.environ['RAG_EMBEDDING_MODEL'], device='cpu')" && \
     python -c "import os; from faster_whisper import WhisperModel; WhisperModel(os.environ['WHISPER_MODEL'], device='cpu', compute_type='int8', download_root=os.environ['WHISPER_MODEL_DIR'])" && \
     python -c "import os; import tiktoken; tiktoken.get_encoding(os.environ['TIKTOKEN_ENCODING_NAME'])" && \
-    # Optimize embedding model for CPU inference
     python -c "import torch; torch.set_num_threads(4); print('CPU threads set to 4')"
 
 # Since USE_OLLAMA=false, we skip Ollama installation entirely
-# This reduces image size and startup time since you're using external Ollama
 
 # Copy built frontend files
 COPY --chown=$UID:$GID --from=build /app/build /app/build
@@ -145,10 +141,6 @@ RUN chown -R $UID:$GID /app /home/app
 RUN chmod -R g+rwX /app /home/app && \
     find /app -type d -exec chmod g+s {} + && \
     find /home/app -type d -exec chmod g+s {} +
-
-# Health check optimized for your setup
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl --silent --fail http://localhost:${PORT:-8080}/health | jq -ne 'input.status == true' || exit 1
 
 # Expose port
 EXPOSE 8080
