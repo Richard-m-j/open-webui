@@ -11,7 +11,7 @@ ARG BUILD_HASH=dev-build
 ARG UID=1000
 ARG GID=1000
 
-######## WebUI frontend ########
+######## Stage 1: WebUI Frontend Build ########
 FROM --platform=$BUILDPLATFORM node:22-alpine3.20 AS build
 ARG BUILD_HASH
 
@@ -28,18 +28,82 @@ COPY . .
 ENV APP_BUILD_HASH=${BUILD_HASH}
 RUN npm run build
 
-######## WebUI backend ########
-FROM python:3.11-slim-bookworm AS base
+######## Stage 2: Python Backend Builder (PyInstaller) ########
+FROM python:3.11-alpine3.20 AS py-builder
 
-ARG USE_CUDA
-ARG USE_OLLAMA
-ARG USE_EMBEDDING_MODEL
-ARG USE_RERANKING_MODEL
+# Install build-time system dependencies for Alpine
+RUN apk add --no-cache \
+    build-base \
+    git \
+    pandoc \
+    ffmpeg \
+    openblas-dev \
+    gcc
+
+WORKDIR /app
+
+# Set environment variables required for model download
+ENV RAG_EMBEDDING_MODEL=${USE_EMBEDDING_MODEL} \
+    WHISPER_MODEL="base" \
+    WHISPER_MODEL_DIR="/app/backend/data/cache/whisper/models" \
+    SENTENCE_TRANSFORMERS_HOME="/app/backend/data/cache/embedding/models" \
+    TIKTOKEN_ENCODING_NAME=${USE_TIKTOKEN_ENCODING_NAME} \
+    TIKTOKEN_CACHE_DIR="/app/backend/data/cache/tiktoken" \
+    HF_HOME="/app/backend/data/cache/embedding/models"
+
+# Copy and install Python dependencies, including pyinstaller
+COPY ./backend/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir --upgrade pip uv && \
+    pip install --no-cache-dir pyinstaller && \
+    # Install torch for CPU on Alpine
+    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu --no-cache-dir && \
+    uv pip install --system -r requirements.txt --no-cache-dir
+
+# Copy backend source code
+COPY ./backend ./backend
+
+# Pre-download all models so they can be bundled by PyInstaller
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer(os.environ['RAG_EMBEDDING_MODEL'], device='cpu')" && \
+    python -c "from faster_whisper import WhisperModel; WhisperModel(os.environ['WHISPER_MODEL'], device='cpu', compute_type='int8', download_root=os.environ['WHISPER_MODEL_DIR'])" && \
+    python -c "import tiktoken; tiktoken.get_encoding(os.environ['TIKTOKEN_ENCODING_NAME'])"
+
+# Compile the application using PyInstaller
+# We bundle the entire data cache (models) and the migrations folder into the executable
+RUN pyinstaller --noconfirm --onefile --name webui \
+    --add-data "backend/data/cache:data/cache" \
+    --add-data "backend/migrations:migrations" \
+    backend/main.py
+
+
+######## Stage 3: Final Production Image ########
+FROM alpine:3.20 AS final
+
 ARG UID
 ARG GID
 ARG BUILD_HASH
+ARG USE_OLLAMA
+ARG USE_EMBEDDING_MODEL
+ARG USE_RERANKING_MODEL
 
-## Environment Configuration - CPU Optimized ##
+# Create non-root user for security
+# Using -D for "no password", -s for shell, -h for home dir
+RUN addgroup -g $GID app && \
+    adduser -u $UID -G app -h /home/app -s /bin/bash -D app
+
+# Install only essential RUNTIME system dependencies
+RUN apk add --no-cache \
+    bash \
+    ffmpeg \
+    pandoc \
+    openblas \
+    netcat-openbsd \
+    curl \
+    jq
+
+WORKDIR /app
+
+# Environment Configuration
+# These are needed at runtime by the compiled binary
 ENV ENV=prod \
     PORT=8080 \
     USE_OLLAMA_DOCKER=${USE_OLLAMA} \
@@ -47,94 +111,36 @@ ENV ENV=prod \
     USE_EMBEDDING_MODEL_DOCKER=${USE_EMBEDDING_MODEL} \
     USE_RERANKING_MODEL_DOCKER=${USE_RERANKING_MODEL} \
     WEBUI_BUILD_VERSION=${BUILD_HASH} \
-    DOCKER=true
-
-## URL Configuration - Optimized for your docker-compose setup ##
-# Point to your external Ollama container
-ENV OLLAMA_BASE_URL="http://ollama:11434" \
-    OPENAI_API_BASE_URL=""
-
-## Security and Privacy Configuration ##
-ENV OPENAI_API_KEY="" \
+    DOCKER=true \
+    OLLAMA_BASE_URL="http://ollama:11434" \
+    OPENAI_API_BASE_URL="" \
+    OPENAI_API_KEY="" \
     WEBUI_SECRET_KEY="" \
     SCARF_NO_ANALYTICS=true \
     DO_NOT_TRACK=true \
-    ANONYMIZED_TELEMETRY=false
-
-## Model Configuration - CPU Optimized ##
-# Use base whisper model for better CPU performance
-ENV WHISPER_MODEL="base" \
-    WHISPER_MODEL_DIR="/app/backend/data/cache/whisper/models" \
-    RAG_EMBEDDING_MODEL="$USE_EMBEDDING_MODEL_DOCKER" \
-    RAG_RERANKING_MODEL="$USE_RERANKING_MODEL_DOCKER" \
-    SENTENCE_TRANSFORMERS_HOME="/app/backend/data/cache/embedding/models" \
-    TIKTOKEN_ENCODING_NAME="cl100k_base" \
-    TIKTOKEN_CACHE_DIR="/app/backend/data/cache/tiktoken" \
-    HF_HOME="/app/backend/data/cache/embedding/models" \
-    # CPU-specific optimizations
+    ANONYMIZED_TELEMETRY=false \
+    # Point cache dirs to locations INSIDE the container that the app expects
+    WHISPER_MODEL_DIR="/app/data/cache/whisper/models" \
+    SENTENCE_TRANSFORMERS_HOME="/app/data/cache/embedding/models" \
+    TIKTOKEN_CACHE_DIR="/app/data/cache/tiktoken" \
+    HF_HOME="/app/data/cache/embedding/models" \
+    # Set runtime thread counts
     OMP_NUM_THREADS=4 \
-    MKL_NUM_THREADS=4 \
-    NUMBA_CACHE_DIR="/tmp/numba_cache"
+    MKL_NUM_THREADS=4
 
-WORKDIR /app/backend
-
-# Create non-root user for security
-RUN groupadd --gid $GID app && \
-    useradd --uid $UID --gid $GID --home /home/app --create-home --shell /bin/bash app
-
-# Create necessary directories with CPU-optimized structure
-RUN mkdir -p /home/app/.cache/chroma \
-             /app/backend/data/cache/whisper/models \
-             /app/backend/data/cache/embedding/models \
-             /app/backend/data/cache/tiktoken \
-             /tmp/numba_cache && \
+# Create necessary directories for runtime data (e.g., ChromaDB)
+RUN mkdir -p /home/app/.cache/chroma && \
     echo -n 00000000-0000-0000-0000-000000000000 > /home/app/.cache/chroma/telemetry_user_id
 
-# Install system dependencies - minimal CPU-only set
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        git \
-        build-essential \
-        pandoc \
-        gcc \
-        netcat-openbsd \
-        curl \
-        jq \
-        python3-dev \
-        ffmpeg \
-        libsm6 \
-        libxext6 \
-        libblas3 \
-        liblapack3 \
-        libopenblas-dev && \
-    rm -rf /var/lib/apt/lists/* && \
-    apt-get clean
+# Copy compiled backend binary from the builder stage
+COPY --from=py-builder /app/dist/webui /app/webui
 
-# Copy and install Python dependencies
-COPY --chown=$UID:$GID ./backend/requirements.txt ./requirements.txt
+# Copy built frontend assets from the frontend build stage
+COPY --from=build /app/build /app/build
+COPY --from=build /app/CHANGELOG.md /app/CHANGELOG.md
+COPY --from=build /app/package.json /app/package.json
 
-# CPU-optimized Python package installation
-RUN pip3 install --no-cache-dir --upgrade pip uv && \
-    pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu --no-cache-dir && \
-    uv pip install --system -r requirements.txt --no-cache-dir
-
-# Pre-download models optimized for CPU performance
-RUN python -c "import os; from sentence_transformers import SentenceTransformer; SentenceTransformer(os.environ['RAG_EMBEDDING_MODEL'], device='cpu')" && \
-    python -c "import os; from faster_whisper import WhisperModel; WhisperModel(os.environ['WHISPER_MODEL'], device='cpu', compute_type='int8', download_root=os.environ['WHISPER_MODEL_DIR'])" && \
-    python -c "import os; import tiktoken; tiktoken.get_encoding(os.environ['TIKTOKEN_ENCODING_NAME'])" && \
-    python -c "import torch; torch.set_num_threads(4); print('CPU threads set to 4')"
-
-# Since USE_OLLAMA=false, we skip Ollama installation entirely
-
-# Copy built frontend files
-COPY --chown=$UID:$GID --from=build /app/build /app/build
-COPY --chown=$UID:$GID --from=build /app/CHANGELOG.md /app/CHANGELOG.md
-COPY --chown=$UID:$GID --from=build /app/package.json /app/package.json
-
-# Copy backend files
-COPY --chown=$UID:$GID ./backend .
-
-# Set proper ownership
+# Set ownership for all application and data directories
 RUN chown -R $UID:$GID /app /home/app
 
 # Security: Set proper permissions for OpenShift compatibility
@@ -142,10 +148,9 @@ RUN chmod -R g+rwX /app /home/app && \
     find /app -type d -exec chmod g+s {} + && \
     find /home/app -type d -exec chmod g+s {} +
 
-# Expose port
+# Expose port and switch to non-root user
 EXPOSE 8080
-
-# Switch to non-root user
 USER $UID:$GID
 
-CMD ["bash", "start.sh"]
+# The CMD now simply executes the self-contained binary
+CMD ["./webui"]
