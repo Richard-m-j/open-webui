@@ -1,12 +1,9 @@
 # syntax=docker/dockerfile:1
 
-# ==============================================================================
-# ===== Stage 1: Build Arguments & Global Configuration ========================
-# ==============================================================================
-# Define build arguments once at the top for clarity and reuse across stages.
-# These are optimized for a CPU-only deployment.
+# Build args optimized for CPU-only deployment
 ARG USE_CUDA=false
 ARG USE_OLLAMA=false
+# Lightweight embedding model for CPU performance
 ARG USE_EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
 ARG USE_RERANKING_MODEL=""
 ARG USE_TIKTOKEN_ENCODING_NAME="cl100k_base"
@@ -14,88 +11,25 @@ ARG BUILD_HASH=dev-build
 ARG UID=1000
 ARG GID=1000
 
-# ==============================================================================
-# ===== Stage 2: Frontend Builder ==============================================
-# ==============================================================================
-# This stage builds the static frontend assets.
-FROM --platform=$BUILDPLATFORM node:22-alpine3.20 AS frontend-builder
+######## WebUI frontend ########
+FROM --platform=$BUILDPLATFORM node:22-alpine3.20 AS build
 ARG BUILD_HASH
 
 WORKDIR /app
 
-# Install git just for getting the build hash, it won't be in the final image.
+# Install git for build hash
 RUN apk add --no-cache git
 
-# Copy package files and install dependencies to leverage Docker layer caching.
+# Copy package files first for better layer caching
 COPY package.json package-lock.json ./
 RUN npm ci --force
 
-# Copy the rest of the source code and build the application.
 COPY . .
 ENV APP_BUILD_HASH=${BUILD_HASH}
 RUN npm run build
 
-# ==============================================================================
-# ===== Stage 3: Backend Builder & Model Downloader ============================
-# ==============================================================================
-# This stage installs Python dependencies and pre-downloads all necessary models.
-# It includes build-time tools that are discarded and not included in the final image.
-FROM python:3.11-slim-bookworm AS backend-builder
-
-# Re-declare ARGs from global scope that are needed in this stage.
-ARG USE_EMBEDDING_MODEL
-ARG USE_TIKTOKEN_ENCODING_NAME
-
-WORKDIR /app/backend
-
-# --- FIX STARTS HERE ---
-# Set the concrete environment variables needed for this build stage.
-# These paths must match the paths used in the final stage.
-ENV RAG_EMBEDDING_MODEL=${USE_EMBEDDING_MODEL} \
-    WHISPER_MODEL="base" \
-    WHISPER_MODEL_DIR="/app/backend/data/cache/whisper/models" \
-    TIKTOKEN_ENCODING_NAME=${USE_TIKTOKEN_ENCODING_NAME} \
-    SENTENCE_TRANSFORMERS_HOME="/app/backend/data/cache/embedding/models" \
-    HF_HOME="/app/backend/data/cache/embedding/models" \
-    TIKTOKEN_CACHE_DIR="/app/backend/data/cache/tiktoken"
-# --- FIX ENDS HERE ---
-
-# Install build-time system dependencies needed to compile Python packages.
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        build-essential \
-        git \
-        gcc \
-        python3-dev \
-        libopenblas-dev && \
-    rm -rf /var/lib/apt/lists/*
-
-# Create a virtual environment for clean dependency management.
-ENV VIRTUAL_ENV=/opt/venv
-RUN python3 -m venv $VIRTUAL_ENV
-ENV PATH="$VIRTUAL_ENV/bin:$PATH"
-
-# Install Python dependencies into the virtual environment.
-COPY ./backend/requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir --upgrade pip uv && \
-    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu --no-cache-dir && \
-    uv pip install --system -r requirements.txt --no-cache-dir
-
-# Create cache directories before downloading models.
-# This command will now work because the variables are defined.
-RUN mkdir -p ${SENTENCE_TRANSFORMERS_HOME} ${WHISPER_MODEL_DIR} ${TIKTOKEN_CACHE_DIR}
-
-# Pre-download and cache all models and tokenizers.
-RUN python -c "import os; from sentence_transformers import SentenceTransformer; SentenceTransformer(os.environ['RAG_EMBEDDING_MODEL'], device='cpu')" && \
-    python -c "import os; from faster_whisper import WhisperModel; WhisperModel(os.environ['WHISPER_MODEL'], device='cpu', compute_type='int8', download_root=os.environ['WHISPER_MODEL_DIR'])" && \
-    python -c "import os; import tiktoken; tiktoken.get_encoding(os.environ['TIKTOKEN_ENCODING_NAME'])"
-
-# ==============================================================================
-# ===== Stage 4: Final Production Image ========================================
-# ==============================================================================
-# This is the final, lean production image. It copies artifacts from the
-# previous stages and only includes necessary runtime dependencies.
-FROM python:3.11-slim-bookworm
+######## WebUI backend ########
+FROM python:3.11-slim-bookworm AS base
 
 ARG USE_CUDA
 ARG USE_OLLAMA
@@ -105,7 +39,7 @@ ARG UID
 ARG GID
 ARG BUILD_HASH
 
-## Environment Configuration
+## Environment Configuration - CPU Optimized ##
 ENV ENV=prod \
     PORT=8080 \
     USE_OLLAMA_DOCKER=${USE_OLLAMA} \
@@ -115,18 +49,20 @@ ENV ENV=prod \
     WEBUI_BUILD_VERSION=${BUILD_HASH} \
     DOCKER=true
 
-## URL Configuration
+## URL Configuration - Optimized for your docker-compose setup ##
+# Point to your external Ollama container
 ENV OLLAMA_BASE_URL="http://ollama:11434" \
     OPENAI_API_BASE_URL=""
 
-## Security and Privacy Configuration
+## Security and Privacy Configuration ##
 ENV OPENAI_API_KEY="" \
     WEBUI_SECRET_KEY="" \
     SCARF_NO_ANALYTICS=true \
     DO_NOT_TRACK=true \
     ANONYMIZED_TELEMETRY=false
 
-## Model and Path Configuration
+## Model Configuration - CPU Optimized ##
+# Use base whisper model for better CPU performance
 ENV WHISPER_MODEL="base" \
     WHISPER_MODEL_DIR="/app/backend/data/cache/whisper/models" \
     RAG_EMBEDDING_MODEL="$USE_EMBEDDING_MODEL_DOCKER" \
@@ -135,62 +71,81 @@ ENV WHISPER_MODEL="base" \
     TIKTOKEN_ENCODING_NAME="cl100k_base" \
     TIKTOKEN_CACHE_DIR="/app/backend/data/cache/tiktoken" \
     HF_HOME="/app/backend/data/cache/embedding/models" \
+    # CPU-specific optimizations
+    OMP_NUM_THREADS=4 \
+    MKL_NUM_THREADS=4 \
     NUMBA_CACHE_DIR="/tmp/numba_cache"
-
-## CPU Performance Configuration
-ENV OMP_NUM_THREADS=4 \
-    MKL_NUM_THREADS=4
 
 WORKDIR /app/backend
 
-# Install only essential RUNTIME system dependencies.
+# Create non-root user for security
+RUN groupadd --gid $GID app && \
+    useradd --uid $UID --gid $GID --home /home/app --create-home --shell /bin/bash app
+
+# Create necessary directories with CPU-optimized structure
+RUN mkdir -p /home/app/.cache/chroma \
+             /app/backend/data/cache/whisper/models \
+             /app/backend/data/cache/embedding/models \
+             /app/backend/data/cache/tiktoken \
+             /tmp/numba_cache && \
+    echo -n 00000000-0000-0000-0000-000000000000 > /home/app/.cache/chroma/telemetry_user_id
+
+# Install system dependencies - minimal CPU-only set
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
+        git \
+        build-essential \
+        pandoc \
+        gcc \
+        netcat-openbsd \
+        curl \
+        jq \
+        python3-dev \
         ffmpeg \
         libsm6 \
         libxext6 \
         libblas3 \
         liblapack3 \
-        netcat-openbsd && \
+        libopenblas-dev && \
     rm -rf /var/lib/apt/lists/* && \
     apt-get clean
 
-# Create the non-root user and group.
-RUN groupadd --gid $GID app && \
-    useradd --uid $UID --gid $GID --home /home/app --create-home --shell /bin/bash app
+# Copy and install Python dependencies
+COPY --chown=$UID:$GID ./backend/requirements.txt ./requirements.txt
 
-# Create directories and set initial ownership.
-RUN mkdir -p /home/app/.cache/chroma \
-             /app/backend/data \
-             /tmp/numba_cache && \
-    echo -n 00000000-0000-0000-0000-000000000000 > /home/app/.cache/chroma/telemetry_user_id && \
-    chown -R $UID:$GID /app /home/app /tmp/numba_cache
+# CPU-optimized Python package installation
+RUN pip3 install --no-cache-dir --upgrade pip uv && \
+    pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu --no-cache-dir && \
+    uv pip install --system -r requirements.txt --no-cache-dir
 
-# Copy the virtual environment with Python packages from the backend-builder stage.
-ENV VIRTUAL_ENV=/opt/venv
-COPY --chown=$UID:$GID --from=backend-builder $VIRTUAL_ENV $VIRTUAL_ENV
-ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+# Pre-download models optimized for CPU performance
+RUN python -c "import os; from sentence_transformers import SentenceTransformer; SentenceTransformer(os.environ['RAG_EMBEDDING_MODEL'], device='cpu')" && \
+    python -c "import os; from faster_whisper import WhisperModel; WhisperModel(os.environ['WHISPER_MODEL'], device='cpu', compute_type='int8', download_root=os.environ['WHISPER_MODEL_DIR'])" && \
+    python -c "import os; import tiktoken; tiktoken.get_encoding(os.environ['TIKTOKEN_ENCODING_NAME'])" && \
+    python -c "import torch; torch.set_num_threads(4); print('CPU threads set to 4')"
 
-# Copy the pre-downloaded models and caches from the backend-builder stage.
-COPY --chown=$UID:$GID --from=backend-builder /app/backend/data/cache /app/backend/data/cache
+# Since USE_OLLAMA=false, we skip Ollama installation entirely
 
-# Copy the built frontend assets from the frontend-builder stage.
-COPY --chown=$UID:$GID --from=frontend-builder /app/build /app/build
-COPY --chown=$UID:$GID --from=frontend-builder /app/CHANGELOG.md /app/CHANGELOG.md
-COPY --chown=$UID:$GID --from=frontend-builder /app/package.json /app/package.json
+# Copy built frontend files
+COPY --chown=$UID:$GID --from=build /app/build /app/build
+COPY --chown=$UID:$GID --from=build /app/CHANGELOG.md /app/CHANGELOG.md
+COPY --chown=$UID:$GID --from=build /app/package.json /app/package.json
 
-# Copy the backend application code.
+# Copy backend files
 COPY --chown=$UID:$GID ./backend .
 
-# Ensure consistent ownership and set group permissions for OpenShift compatibility.
-RUN chown -R $UID:$GID /app /home/app && \
-    chmod -R g+rwX /app /home/app && \
+# Set proper ownership
+RUN chown -R $UID:$GID /app /home/app
+
+# Security: Set proper permissions for OpenShift compatibility
+RUN chmod -R g+rwX /app /home/app && \
     find /app -type d -exec chmod g+s {} + && \
     find /home/app -type d -exec chmod g+s {} +
 
-# Expose port and switch to the non-root user.
+# Expose port
 EXPOSE 8080
+
+# Switch to non-root user
 USER $UID:$GID
 
-# Set the command to start the application.
 CMD ["bash", "start.sh"]
