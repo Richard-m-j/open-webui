@@ -41,24 +41,24 @@ RUN npm run build
 # This stage installs Python dependencies and pre-downloads all necessary models.
 # It includes build-time tools that are discarded and not included in the final image.
 FROM python:3.11-slim-bookworm AS backend-builder
-ARG RAG_EMBEDDING_MODEL
-ARG WHISPER_MODEL
-ARG WHISPER_MODEL_DIR
-ARG TIKTOKEN_ENCODING_NAME
-ARG SENTENCE_TRANSFORMERS_HOME
-ARG HF_HOME
-ARG TIKTOKEN_CACHE_DIR
+
+# Re-declare ARGs from global scope that are needed in this stage.
+ARG USE_EMBEDDING_MODEL
+ARG USE_TIKTOKEN_ENCODING_NAME
 
 WORKDIR /app/backend
 
-# Set environment variables required for model downloading.
-ENV RAG_EMBEDDING_MODEL=${RAG_EMBEDDING_MODEL} \
-    WHISPER_MODEL=${WHISPER_MODEL} \
-    WHISPER_MODEL_DIR=${WHISPER_MODEL_DIR} \
-    TIKTOKEN_ENCODING_NAME=${TIKTOKEN_ENCODING_NAME} \
-    SENTENCE_TRANSFORMERS_HOME=${SENTENCE_TRANSFORMERS_HOME} \
-    HF_HOME=${HF_HOME} \
-    TIKTOKEN_CACHE_DIR=${TIKTOKEN_CACHE_DIR}
+# --- FIX STARTS HERE ---
+# Set the concrete environment variables needed for this build stage.
+# These paths must match the paths used in the final stage.
+ENV RAG_EMBEDDING_MODEL=${USE_EMBEDDING_MODEL} \
+    WHISPER_MODEL="base" \
+    WHISPER_MODEL_DIR="/app/backend/data/cache/whisper/models" \
+    TIKTOKEN_ENCODING_NAME=${USE_TIKTOKEN_ENCODING_NAME} \
+    SENTENCE_TRANSFORMERS_HOME="/app/backend/data/cache/embedding/models" \
+    HF_HOME="/app/backend/data/cache/embedding/models" \
+    TIKTOKEN_CACHE_DIR="/app/backend/data/cache/tiktoken"
+# --- FIX ENDS HERE ---
 
 # Install build-time system dependencies needed to compile Python packages.
 RUN apt-get update && \
@@ -82,12 +82,13 @@ RUN pip install --no-cache-dir --upgrade pip uv && \
     uv pip install --system -r requirements.txt --no-cache-dir
 
 # Create cache directories before downloading models.
+# This command will now work because the variables are defined.
 RUN mkdir -p ${SENTENCE_TRANSFORMERS_HOME} ${WHISPER_MODEL_DIR} ${TIKTOKEN_CACHE_DIR}
 
 # Pre-download and cache all models and tokenizers.
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('${RAG_EMBEDDING_MODEL}', device='cpu')" && \
-    python -c "from faster_whisper import WhisperModel; WhisperModel('${WHISPER_MODEL}', device='cpu', compute_type='int8', download_root='${WHISPER_MODEL_DIR}')" && \
-    python -c "import tiktoken; tiktoken.get_encoding('${TIKTOKEN_ENCODING_NAME}')"
+RUN python -c "import os; from sentence_transformers import SentenceTransformer; SentenceTransformer(os.environ['RAG_EMBEDDING_MODEL'], device='cpu')" && \
+    python -c "import os; from faster_whisper import WhisperModel; WhisperModel(os.environ['WHISPER_MODEL'], device='cpu', compute_type='int8', download_root=os.environ['WHISPER_MODEL_DIR'])" && \
+    python -c "import os; import tiktoken; tiktoken.get_encoding(os.environ['TIKTOKEN_ENCODING_NAME'])"
 
 # ==============================================================================
 # ===== Stage 4: Final Production Image ========================================
