@@ -98,12 +98,12 @@ WORKDIR /app/backend
 
 ENV HOME=/root
 # Create user and group if not root
-RUN if [ $UID -ne 0 ]; then \
-    if [ $GID -ne 0 ]; then \
-    addgroup --gid $GID app; \
-    fi; \
-    adduser --uid $UID --gid $GID --home $HOME --disabled-password --no-create-home app; \
-    fi
+RUN if [ "$UID" -ne 0 ]; then \
+      if [ "$GID" -ne 0 ]; then \
+        addgroup --gid "$GID" app; \
+      fi; \
+      adduser --uid "$UID" --gid "$GID" --home "$HOME" --disabled-password --no-create-home app; \
+    fi
 
 RUN mkdir -p $HOME/.cache/chroma
 RUN echo -n 00000000-0000-0000-0000-000000000000 > $HOME/.cache/chroma/telemetry_user_id
