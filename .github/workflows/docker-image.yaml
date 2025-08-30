@@ -1,20 +1,63 @@
-name: Build and Push image to dockerhub
+# .github/workflows/build-and-push.yml
+
+name: Build and Push CPU-only Image to Docker Hub
 
 on:
   push:
     branches: [ "main" ]
 
 jobs:
-
-  build:
-
+  build-and-push:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Build the Docker image
-      run: docker build . --file Dockerfile --tag richardjoseph1/open-webui-kube-openwebui:latest
-    - name: push image to docker hub
-      run: |
-        docker login -u richardjoseph1 -p ${{ secrets.DOCKERHUB_TOKEN }}
-        docker push richardjoseph1/open-webui-kube-openwebui:latest
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # (Optional but Recommended) Setup QEMU for multi-platform builds (amd64, arm64)
+      # This allows your image to run on standard EC2 instances (amd64) and Graviton (arm64)
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      # Setup Docker Buildx, the builder engine
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Securely log in to Docker Hub
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Automatically generate tags for your image (e.g., 'latest' and a git-sha tag)
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: richardjoseph1/open-webui-kube-openwebui
+          tags: |
+            type=sha,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      # The main build and push step
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Use GitHub's cache for faster builds
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # Set build arguments for a CPU-only, slim build
+          build-args: |
+            BUILD_HASH=${{ github.sha }}
+            USE_CUDA=false
+            USE_OLLAMA=false
+            USE_SLIM=true
