@@ -148,4 +148,4 @@ EXPOSE 8080
 # Switch to non-root user
 USER $UID:$GID
 
-CMD ["bash", "start.sh"]
+ENTRYPOINT ["bash", "start.sh"]
