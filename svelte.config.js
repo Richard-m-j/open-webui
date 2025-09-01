@@ -38,6 +38,9 @@ const config = {
 			pollInterval: 60000
 		}
 	},
+	paths: {
+        base: '/webui'
+    },
 	vitePlugin: {
 		// inspector: {
 		// 	toggleKeyCombo: 'meta-shift', // Key combination to open the inspector
