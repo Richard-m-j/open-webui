@@ -4,7 +4,7 @@ metadata:
   name: open-webui-pv
 spec:
   capacity:
-    storage: 5Gi
+    storage: 2Gi
   accessModes:
     - ReadWriteOnce
   hostPath:

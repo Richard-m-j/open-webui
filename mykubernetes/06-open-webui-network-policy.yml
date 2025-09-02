@@ -13,11 +13,17 @@ spec:
   - from:
     - ipBlock:
         cidr: 0.0.0.0/0
+    ports:
+    - protocol: TCP
+      port: 8080
   egress:
   - to:
     - podSelector:
         matchLabels:
           app: ollama
+    ports:
+    - protocol: TCP
+      port: 11434
   - to:
     - namespaceSelector:
         matchLabels:
