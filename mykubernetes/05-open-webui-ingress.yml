@@ -1,7 +1,7 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: modelmanager-ingress
+  name: open-webui-ingress
   annotations:
     nginx.ingress.kubernetes.io/use-regex: "false"
     # Optional: CORS headers
