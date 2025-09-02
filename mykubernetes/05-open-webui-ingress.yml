@@ -1,0 +1,24 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: modelmanager-ingress
+  annotations:
+    nginx.ingress.kubernetes.io/use-regex: "false"
+    # Optional: CORS headers
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, PUT, DELETE, OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-headers: "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range"
+spec:
+  ingressClassName: nginx
+  rules:
+  - http:
+      paths:
+      # Rule 2: OpenWebUI at the Root
+      # This rule must be last to act as the default.
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: open-webui
+            port:
+              number: 8080
