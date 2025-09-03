@@ -1,6 +1,7 @@
+# .github/workflows/cicd-pipeline.yml
+
 name: CI & CD Pipeline
 
-# Triggers the workflow on push or pull request events but only for the "main" branch.
 on:
   push:
     branches: [ "main" ]
@@ -8,7 +9,7 @@ on:
     branches: [ "main" ]
 
 jobs:
-  # JOB 1: Lints the code and verifies the application builds successfully.
+  # JOB 1: Lints the code and builds the frontend application.
   lint-and-build:
     name: Lint & Build
     runs-on: ubuntu-latest
@@ -16,20 +17,31 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+        cache: 'npm'
+
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.11'
-        cache: 'pip' # Enables caching for faster dependency installation
+        cache: 'pip'
 
-    - name: Install dependencies
+    - name: Install Frontend Dependencies
+      run: npm install --force
+
+    - name: Install Backend Dependencies
       run: |
         pip install -r backend/requirements.txt
+        pip install pylint
 
-    - name: Lint with Ruff
-      run: |
-        pip install ruff
-        ruff --output-format=github .
+    - name: Lint Backend Code
+      run: npm run lint:backend
+
+    - name: Build Frontend Application
+      run: npm run build
 
   # JOB 2: Runs security scans for vulnerable dependencies (SCA) and secrets.
   security-scans:
@@ -46,8 +58,7 @@ jobs:
         cache: 'pip'
 
     - name: Install dependencies
-      run: |
-        pip install -r backend/requirements.txt
+      run: pip install -r backend/requirements.txt
 
     - name: Software Component Analysis (SCA) with pip-audit
       run: |
@@ -72,14 +83,12 @@ jobs:
     - name: Initialize CodeQL
       uses: github/codeql-action/init@v3
       with:
-        languages: python
+        languages: python, javascript
 
     - name: Perform CodeQL Analysis
       uses: github/codeql-action/analyze@v3
-      with:
-        category: "/language:python"
 
-  # JOB 4: Runs unit tests.
+  # JOB 4: Runs unit tests for both frontend and backend.
   unit-tests:
     name: Unit Tests
     runs-on: ubuntu-latest
@@ -87,33 +96,39 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+        cache: 'npm'
+
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.11'
         cache: 'pip'
 
-    - name: Install dependencies
+    - name: Install Frontend Dependencies
+      run: npm ci --force
+
+    - name: Install Backend Dependencies
       run: |
         pip install -r backend/requirements.txt
         pip install pytest
 
-    - name: Run unit tests
-      run: |
-        pytest backend/open_webui/test/
+    - name: Run Frontend Unit Tests
+      run: npm run test:frontend
+
+    - name: Run Backend Unit Tests
+      run: pytest backend/open_webui/test/
 
   # JOB 5: Builds and pushes the Docker image to Docker Hub.
-  # This job will ONLY run after the three CI jobs above succeed, and only on a push to main.
+  # This job will ONLY run after the CI jobs above succeed, and only on a push to main.
   build-and-push-docker:
     name: Build and Push Docker Image
     runs-on: ubuntu-latest
-
-    # Define dependencies: This job waits for the CI jobs to be successful.
     needs: [lint-and-build, security-scans, codeql-analysis, unit-tests]
-
-    # Define condition: This job only runs for push events on the main branch.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
