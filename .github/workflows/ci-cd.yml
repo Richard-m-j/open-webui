@@ -50,6 +50,14 @@ jobs:
   test:
     name: Unit Tests
     runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: "testing"
+      AWS_SECRET_ACCESS_KEY: "testing"
+      AWS_SECURITY_TOKEN: "testing"
+      AWS_SESSION_TOKEN: "testing"
+      AWS_DEFAULT_REGION: "us-east-1"
+      GCS_BUCKET: "test-bucket"
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -73,10 +81,19 @@ jobs:
           pip install pytest pytest-cov "moto[s3]"
           pip install -e .
 
+      - name: Fix Python test imports
+        run: |
+          find backend/open_webui/test -type f -name 'test_*.py' -exec sed -i 's/from test.util/from open_webui.test.util/g' {} +
+          sed -i 's/MAX_RETRY_COUNT/REDIS_SENTINEL_MAX_RETRY_COUNT/g' backend/open_webui/test/util/test_redis.py
+          sed -i '1s/^/from moto import mock_aws\n/' backend/open_webui/test/apps/webui/storage/test_provider.py
+          sed -i '/def test_gcs_storage_provider/i @mock_aws' backend/open_webui/test/apps/webui/storage/test_provider.py
+
       - name: Run Frontend Unit Tests
         run: npm run test:frontend
 
       - name: Run Backend Unit Tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}/backend
         run: pytest backend/open_webui/test/
 
   # ====================================================================================
