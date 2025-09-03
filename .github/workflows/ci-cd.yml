@@ -111,16 +111,19 @@ jobs:
     - name: Install Frontend Dependencies
       run: npm ci --force
 
-    - name: Install Backend Dependencies
+    - name: Install Backend Dependencies and Test Libraries
       run: |
         pip install -r backend/requirements.txt
-        pip install pytest
+        pip install pytest pytest-cov "moto[s3]"
 
     - name: Run Frontend Unit Tests
       run: npm run test:frontend
 
     - name: Run Backend Unit Tests
-      run: pytest backend/open_webui/test/
+      env:
+        PYTHONPATH: ${{ github.workspace }}/backend
+      run: |
+        pytest backend/open_webui/test/
 
   # JOB 5: Builds and pushes the Docker image to Docker Hub.
   # This job will ONLY run after the CI jobs above succeed, and only on a push to main.
