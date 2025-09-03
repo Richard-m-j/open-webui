@@ -1,6 +1,3 @@
-# .github/workflows/cicd-pipeline.yml
-
-# This is the name of the consolidated workflow.
 name: CI & CD Pipeline
 
 # Triggers the workflow on push or pull request events but only for the "main" branch.
