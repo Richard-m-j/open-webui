@@ -1,5 +1,3 @@
-# .github/workflows/cicd-pipeline.yml
-
 name: CI & CD Pipeline
 
 on:
@@ -9,71 +7,171 @@ on:
     branches: [ "main" ]
 
 jobs:
-  # JOB 1: Lints the code and builds the frontend application.
-  lint-and-build:
-    name: Lint & Build
+  # JOB 1: Install all dependencies for subsequent jobs
+  setup:
+    name: Setup Environment & Install Dependencies
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Set up Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '22'
-        cache: 'npm'
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
-        cache: 'pip'
+      - name: Cache Python dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
 
-    - name: Install Frontend Dependencies
-      run: npm install --force
+      - name: Install Frontend Dependencies
+        run: npm ci --force
 
-    - name: Install Backend Dependencies
-      run: |
-        pip install -r backend/requirements.txt
-        pip install pylint
+      - name: Install Backend and Test Dependencies
+        run: |
+          pip install -r backend/requirements.txt
+          pip install ruff pytest pytest-cov "moto[s3]"
+          pip install -e backend
 
-    - name: Lint Backend Code
-      run: npm run lint:backend
+  # JOB 2: Lints the code using Ruff
+  lint:
+    name: Lint Code
+    runs-on: ubuntu-latest
+    needs: setup
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
 
-    - name: Build Frontend Application
-      run: npm run build
+      - name: Restore cached Python dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      
+      - name: Install Backend and Test Dependencies
+        run: |
+          pip install -r backend/requirements.txt
+          pip install ruff pytest pytest-cov "moto[s3]"
+          pip install -e backend
 
-  # JOB 2: Runs security scans for vulnerable dependencies (SCA) and secrets.
+      - name: Lint with Ruff
+        run: ruff check . --output-format=github
+
+      - name: Check formatting with Ruff
+        run: ruff format --check .
+
+  # JOB 3: Runs security scans
   security-scans:
     name: Security Scans (SCA & Secrets)
     runs-on: ubuntu-latest
+    needs: setup
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
-        cache: 'pip'
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
 
-    - name: Install dependencies
-      run: pip install -r backend/requirements.txt
+      - name: Restore cached Python dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
 
-    - name: Software Component Analysis (SCA) with pip-audit
-      run: |
-        pip install pip-audit
-        pip-audit
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
 
-    - name: Static Application Security Testing (SAST) with Gitleaks
-      uses: gitleaks/gitleaks-action@v2
-      with:
-        config-path: .gitleaks.toml
+      - name: Install Frontend Dependencies
+        run: npm ci --force
 
-  # JOB 3: Performs in-depth static analysis with CodeQL.
+      - name: Install Backend Dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Software Component Analysis (SCA) - Frontend
+        run: npm audit --audit-level=high
+
+      - name: Software Component Analysis (SCA) - Backend
+        run: |
+          pip install pip-audit
+          pip-audit
+
+      - name: Secrets Scan with Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        with:
+          config-path: .gitleaks.toml
+
+  # JOB 4: Runs unit tests for frontend and backend
+  test:
+    name: Run Unit Tests
+    runs-on: ubuntu-latest
+    needs: setup
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Restore cached Python dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install Frontend Dependencies
+        run: npm ci --force
+
+      - name: Install Backend and Test Dependencies
+        run: |
+          pip install -r backend/requirements.txt
+          pip install ruff pytest pytest-cov "moto[s3]"
+          pip install -e backend
+
+      - name: Run Frontend Unit Tests
+        run: npm run test:frontend
+
+      - name: Run Backend Unit Tests
+        run: pytest backend/open_webui/test/
+  
+  # JOB 5: Performs in-depth static analysis with CodeQL.
   codeql-analysis:
     name: CodeQL Analysis
     runs-on: ubuntu-latest
+    needs: setup
     permissions:
       security-events: write
     steps:
@@ -88,59 +186,21 @@ jobs:
     - name: Perform CodeQL Analysis
       uses: github/codeql-action/analyze@v3
 
-  # JOB 4: Runs unit tests for both frontend and backend.
-  unit-tests:
-    name: Unit Tests
-    runs-on: ubuntu-latest
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
-    - name: Set up Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '22'
-        cache: 'npm'
-
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
-        cache: 'pip'
-
-    - name: Install Frontend Dependencies
-      run: npm ci --force
-
-    - name: Install Backend Dependencies and Test Libraries
-      run: |
-        pip install -r backend/requirements.txt
-        pip install pytest pytest-cov "moto[s3]"
-
-    - name: Run Frontend Unit Tests
-      run: npm run test:frontend
-
-    - name: Run Backend Unit Tests
-      env:
-        PYTHONPATH: ${{ github.workspace }}/backend
-      run: |
-        pytest backend/open_webui/test/
-
-  # JOB 5: Builds and pushes the Docker image to Docker Hub.
-  # This job will ONLY run after the CI jobs above succeed, and only on a push to main.
+  # JOB 6: Builds and pushes the Docker image to Docker Hub.
   build-and-push-docker:
     name: Build and Push Docker Image
     runs-on: ubuntu-latest
-    needs: [lint-and-build, security-scans, codeql-analysis, unit-tests]
+    needs: [lint, test, security-scans, codeql-analysis]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Log in to Docker Hub
-      uses: docker/login-action@v3
-      with:
-        username: ${{ secrets.DOCKERHUB_USERNAME }}
-        password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
     - name: Build and push Docker image
       uses: docker/build-push-action@v5
