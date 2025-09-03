@@ -1,0 +1,136 @@
+# .github/workflows/cicd-pipeline.yml
+
+# This is the name of the consolidated workflow.
+name: CI & CD Pipeline
+
+# Triggers the workflow on push or pull request events but only for the "main" branch.
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  # JOB 1: Lints the code and verifies the application builds successfully.
+  lint-and-build:
+    name: Lint & Build
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        cache: 'pip' # Enables caching for faster dependency installation
+
+    - name: Install dependencies
+      run: |
+        pip install -r backend/requirements.txt
+
+    - name: Lint with Ruff
+      run: |
+        pip install ruff
+        ruff --output-format=github .
+
+  # JOB 2: Runs security scans for vulnerable dependencies (SCA) and secrets.
+  security-scans:
+    name: Security Scans (SCA & Secrets)
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        pip install -r backend/requirements.txt
+
+    - name: Software Component Analysis (SCA) with pip-audit
+      run: |
+        pip install pip-audit
+        pip-audit
+
+    - name: Static Application Security Testing (SAST) with Gitleaks
+      uses: gitleaks/gitleaks-action@v2
+      with:
+        config-path: .gitleaks.toml
+
+  # JOB 3: Performs in-depth static analysis with CodeQL.
+  codeql-analysis:
+    name: CodeQL Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name of: Initialize CodeQL
+      uses: github/codeql-action/init@v3
+      with:
+        languages: python
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v3
+      with:
+          category: "/language:python"
+
+  # JOB 4: Runs unit tests.
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        pip install -r backend/requirements.txt
+        pip install pytest
+
+    - name: Run unit tests
+      run: |
+        pytest backend/open_webui/test/
+
+  # JOB 5: Builds and pushes the Docker image to Docker Hub.
+  # This job will ONLY run after the three CI jobs above succeed, and only on a push to main.
+  build-and-push-docker:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+
+    # Define dependencies: This job waits for the CI jobs to be successful.
+    needs: [lint-and-build, security-scans, codeql-analysis, unit-tests]
+
+    # Define condition: This job only runs for push events on the main branch.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Log in to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile
+        push: true
+        tags: ${{ secrets.DOCKERHUB_USERNAME }}/open-webui:latest
