@@ -8,11 +8,10 @@ on:
 
 jobs:
   # ====================================================================================
-  # JOB 1: SETUP
-  # This job installs all dependencies and creates an artifact for other jobs to use.
+  # JOB 1: LINT & FORMAT
   # ====================================================================================
-  setup:
-    name: Setup & Install Dependencies
+  lint-and-format:
+    name: Lint & Format Check
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -30,118 +29,88 @@ jobs:
           node-version: '22'
           cache: 'npm'
 
-      - name: Install Python dependencies
+      - name: Install all dependencies
         run: |
-          python -m pip install --upgrade pip
+          npm ci --force
           pip install -r backend/requirements.txt
-          pip install ruff pytest pytest-cov "moto[s3]"
-          # Install the backend in editable mode to make its modules available
-          pip install -e backend
-
-      - name: Install Frontend Dependencies
-        run: npm ci --force
-
-      - name: Upload dependency artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: dependencies
-          path: |
-            ./.venv
-            ./node_modules
-          retention-days: 1
-
-  # ====================================================================================
-  # JOB 2: LINT & FORMAT
-  # This job depends on 'setup' and uses the installed dependencies.
-  # ====================================================================================
-  lint:
-    name: Lint & Format Check
-    runs-on: ubuntu-latest
-    needs: setup
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Download dependency artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: dependencies
-          path: .
+          pip install ruff
+          pip install -e .
       
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-
       - name: Lint Frontend
         run: npm run lint:frontend
-      
+
       - name: Lint and Format Check Backend
         run: |
-          source .venv/bin/activate
           ruff check . --output-format=github
           ruff format --check .
-  
+
   # ====================================================================================
-  # JOB 3: UNIT TESTS
-  # This job also depends on 'setup' and uses the installed dependencies.
+  # JOB 2: UNIT TESTS
   # ====================================================================================
   test:
     name: Unit Tests
     runs-on: ubuntu-latest
-    needs: setup
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download dependency artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: dependencies
-          path: .
-      
       - name: Set up Python 3.11
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      
+      - name: Install all dependencies
+        run: |
+          npm ci --force
+          pip install -r backend/requirements.txt
+          pip install pytest pytest-cov "moto[s3]"
+          pip install -e .
 
       - name: Run Frontend Unit Tests
         run: npm run test:frontend
 
       - name: Run Backend Unit Tests
-        run: |
-          source .venv/bin/activate
-          pytest backend/open_webui/test/
+        run: pytest backend/open_webui/test/
 
   # ====================================================================================
-  # JOB 4: SECURITY SCANS
-  # This job also depends on 'setup' and uses the installed dependencies.
+  # JOB 3: SECURITY SCANS
   # ====================================================================================
   security-scans:
     name: Security Scans (SCA & Secrets)
     runs-on: ubuntu-latest
-    needs: setup
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Download dependency artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: dependencies
-          path: .
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
+          cache: 'pip'
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
       
+      - name: Install all dependencies
+        run: |
+          npm ci --force
+          pip install -r backend/requirements.txt
+
       - name: SCA - Frontend
         run: npm audit --audit-level=high
 
       - name: SCA - Backend
         run: |
-          source .venv/bin/activate
           pip install pip-audit
           pip-audit
 
@@ -151,12 +120,11 @@ jobs:
           config-path: .gitleaks.toml
 
   # ====================================================================================
-  # JOB 5: CODEQL ANALYSIS
+  # JOB 4: CODEQL ANALYSIS
   # ====================================================================================
   codeql-analysis:
     name: CodeQL Analysis
     runs-on: ubuntu-latest
-    needs: setup
     permissions:
       security-events: write
     steps:
@@ -172,14 +140,12 @@ jobs:
       uses: github/codeql-action/analyze@v3
 
   # ====================================================================================
-  # JOB 6: BUILD & PUSH DOCKER IMAGE
-  # This job runs last, after all checks have passed, on a push to main.
-  # It is independent and builds everything inside its own container environment.
+  # JOB 5: BUILD & PUSH DOCKER IMAGE
   # ====================================================================================
   build-and-push-docker:
     name: Build and Push Docker Image
     runs-on: ubuntu-latest
-    needs: [lint, test, security-scans, codeql-analysis]
+    needs: [lint-and-format, test, security-scans, codeql-analysis]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - name: Checkout repository
