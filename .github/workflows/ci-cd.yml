@@ -161,13 +161,18 @@ jobs:
       uses: github/codeql-action/analyze@v3
 
   # ====================================================================================
-  # JOB 5: BUILD & PUSH DOCKER IMAGE
+  # JOB 5: BUILD, PUSH & UPDATE MANIFEST
   # ====================================================================================
-  build-and-push-docker:
-    name: Build and Push Docker Image
+  build-push-and-update-manifest:
+    name: Build, Push & Update Manifest
     runs-on: ubuntu-latest
     needs: [lint-and-format, test, security-scans, codeql-analysis]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    # Add permissions to allow committing back to the repository
+    permissions:
+      contents: write
+      
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -184,4 +189,20 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/open-webui:latest
+          # CHANGED: Tag the image with the Git commit SHA instead of 'latest'.
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/open-webui:${{ github.sha }}
+
+      - name: Update deployment manifest
+        # ADDED: This step updates the image tag in your deployment file.
+        # IMPORTANT: Please verify the path to your deployment file is correct.
+        run: |
+          sed -i "s|image: .*|image: ${{ secrets.DOCKERHUB_USERNAME }}/open-webui:${{ github.sha }}|g" mykubernetes/04-open-webui-statefulset.yml
+
+      - name: Commit and push manifest changes
+        # ADDED: This step commits the updated manifest file back to your main branch.
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          git add mykubernetes/04-open-webui-statefulset.yml # Verify this path is correct
+          git diff --staged --quiet || git commit -m "CI: Update image tag to ${{ github.sha }}"
+          git push
