@@ -19,7 +19,7 @@ spec:
           claimName: open-webui-data-pvc
       containers:
       - name: open-webui
-        image: richardjoseph1/open-webui:04402d58f9ca0afd8d4e1b81a75c6637ae7d2f11
+        image: richardjoseph1/open-webui:db22a86d52385db331a6df669d013cb18235f8dd
         ports:
         - containerPort: 8080
         env:
