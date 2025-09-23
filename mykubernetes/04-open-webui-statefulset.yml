@@ -32,10 +32,10 @@ spec:
           mountPath: /app/backend/data
         resources:
           requests:
-            cpu: "70m"
+            cpu: "100m"
             memory: "500Mi"
           limits:
-            cpu: "250m"
+            cpu: "500m"
             memory: "1Gi"
         startupProbe:
           httpGet:
