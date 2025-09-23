@@ -4,7 +4,8 @@ kind: Service
 metadata:
   name: open-webui
 spec:
-  type: ClusterIP 
+  type: ClusterIP
+  ClusterIP: None 
   selector:
     app: open-webui
   ports:
